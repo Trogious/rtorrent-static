@@ -1,0 +1,56 @@
+name: Check for new upstream release
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+  workflow_dispatch:        # Manual trigger for testing
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest upstream tag
+        id: upstream
+        run: |
+          TAG=$(git ls-remote --tags --sort=-v:refname https://github.com/rakshasa/rtorrent.git \
+              | grep -oP 'refs/tags/v\K[0-9.]+$' | head -1)
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Upstream latest: v$TAG"
+
+      - name: Get last built version
+        id: local
+        run: |
+          if [ -f .last-built-version ]; then
+            VERSION=$(cat .last-built-version)
+          else
+            VERSION="none"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Last built: $VERSION"
+
+      - name: Trigger build if new version
+        if: steps.upstream.outputs.version != steps.local.outputs.version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "New version detected: v${{ steps.upstream.outputs.version }} (was: ${{ steps.local.outputs.version }})"
+          gh workflow run build.yml
+          gh workflow run build-dynamic.yml
+
+          # Update the tracked version
+          echo "${{ steps.upstream.outputs.version }}" > .last-built-version
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .last-built-version
+          git commit -m "Track built version v${{ steps.upstream.outputs.version }}"
+          git push
+
+      - name: No new version
+        if: steps.upstream.outputs.version == steps.local.outputs.version
+        run: echo "Already up to date (v${{ steps.local.outputs.version }})"

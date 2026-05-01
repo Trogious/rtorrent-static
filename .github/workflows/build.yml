@@ -1,0 +1,41 @@
+name: Build static rtorrent
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build static rtorrent
+        env:
+          URL_MUSL_X86_64: ${{ secrets.URL_MUSL_X86_64 }}
+          URL_ZLIB: ${{ secrets.URL_ZLIB }}
+        run: sudo -E bash scripts/build.sh
+
+      - name: Get build outputs
+        id: build
+        run: |
+          echo "artifact=$(cat /output/artifact-name)" >> "$GITHUB_OUTPUT"
+          echo "tag=$(cat /output/artifact-name | grep -oP 'rtorrent-static-\Kv[0-9.]+')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.artifact }}
+          path: /output/rtorrent-static-*.txz
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.build.outputs.tag }}-static"
+          gh release create "$TAG" \
+            --title "rtorrent ${{ steps.build.outputs.tag }} (static musl build)" \
+            --notes-file /output/release-notes.md \
+            /output/rtorrent-static-*.txz

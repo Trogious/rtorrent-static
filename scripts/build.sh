@@ -329,7 +329,11 @@ tar cJf "$OUTPUT_DIR/$ARTIFACT_DBG" -C src rtorrent-static-debug
 echo "$ARTIFACT" > "$OUTPUT_DIR/artifact-name"
 
 # --- Release notes ---
-MUSL_VERSION=$($CC -v 2>&1 | grep -oP 'musl-cross-make.*?gcc-\K[0-9.]+' || $CC --version | head -1 | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
+# -dumpfullversion is canonical (e.g. "13.2.0"); -dumpversion is the fallback for
+# older GCCs that don't support it. Fail loudly if neither produces output so
+# we never publish a release with a blank toolchain version.
+GCC_VERSION=$("$CC" -dumpfullversion 2>/dev/null || "$CC" -dumpversion)
+: "${GCC_VERSION:?failed to detect GCC version from $CC}"
 cat > "$OUTPUT_DIR/release-notes.md" <<NOTES
 ## Static musl build — x86_64
 
@@ -347,7 +351,7 @@ Fully static binary. No runtime dependencies. Runs on any x86_64 Linux.
 | Lua | ${LUA_VERSION} |
 | tinyxml2 | ${TINYXML2_VERSION} |
 | mimalloc | ${MIMALLOC_VERSION} |
-| musl toolchain (gcc) | ${MUSL_VERSION} |
+| musl toolchain (gcc) | ${GCC_VERSION} |
 
 ### Patches and modifications
 - **epoll_ctl EBADF/ENOENT** (libtorrent): Handle \`EBADF\`/\`ENOENT\` gracefully on \`EPOLL_CTL_MOD\`/\`EPOLL_CTL_DEL\` (race with curl socket lifecycle)

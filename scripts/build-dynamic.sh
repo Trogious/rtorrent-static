@@ -121,6 +121,12 @@ echo "$RTORRENT_TAG" > "$OUTPUT_DIR/release-tag"
 # Collect library versions for release notes
 NCURSES_PKG="libncursesw5-dev"
 dpkg -s "$NCURSES_PKG" &>/dev/null || NCURSES_PKG="libncurses-dev"
+# Capture GCC version actually used for the build (focal uses gcc-13 via PPA,
+# others use the system default). Fail loudly if detection produces nothing so
+# we never publish a release with a blank toolchain version.
+GCC_BIN="${CXX:-g++}"
+GCC_VERSION=$("$GCC_BIN" -dumpfullversion 2>/dev/null || "$GCC_BIN" -dumpversion)
+: "${GCC_VERSION:?failed to detect GCC version from $GCC_BIN}"
 {
     echo "### Ubuntu ${UBUNTU_VERSION} LTS (${VERSION_CODENAME^}) x86_64"
     echo ""
@@ -129,6 +135,11 @@ dpkg -s "$NCURSES_PKG" &>/dev/null || NCURSES_PKG="libncurses-dev"
     echo "|---------|---------|"
     echo "| rtorrent | $RTORRENT_TAG |"
     echo "| libtorrent | $LIBTORRENT_TAG |"
+    echo ""
+    echo "#### Built with"
+    echo "| Tool | Version |"
+    echo "|------|---------|"
+    echo "| gcc/g++ | $GCC_VERSION |"
     echo ""
     echo "#### Linked against (system)"
     echo "| Library | Version |"

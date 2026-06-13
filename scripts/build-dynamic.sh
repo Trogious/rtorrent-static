@@ -53,6 +53,18 @@ $SUDO apt-get install -y \
     libssl-dev libcurl4-openssl-dev libncursesw5-dev zlib1g-dev \
     "$LUA_DEV" "$LUA_BIN"
 
+# libtorrent >= 0.16.13 requires C++20; Focal's stock toolchain (up to g++-10)
+# doesn't pass the AX_CXX_COMPILE_STDCXX(20) probe. Pull g++-13 from
+# ubuntu-toolchain-r/test.
+if [ "$UBUNTU_CODENAME" = "focal" ]; then
+    $SUDO apt-get install -y software-properties-common
+    $SUDO add-apt-repository -y ppa:ubuntu-toolchain-r/test
+    $SUDO apt-get update
+    $SUDO apt-get install -y gcc-13 g++-13
+    export CC=gcc-13
+    export CXX=g++-13
+fi
+
 # =============================================================================
 # Step 2: Detect latest libtorrent/rtorrent tags
 # =============================================================================

@@ -240,29 +240,22 @@ echo "rtorrent:   $RTORRENT_TAG"
 echo "=== Building libtorrent $LIBTORRENT_TAG ==="
 git clone --depth 1 --branch "$LIBTORRENT_TAG" https://github.com/rakshasa/libtorrent.git
 cd libtorrent
-# Patch thread stack size: musl defaults to 128KB, need 8MB like glibc
-sed -i '/pthread_create(&m_thread, nullptr,/i\
-  pthread_attr_t attr;\
-  pthread_attr_init(\&attr);\
-  pthread_attr_setstacksize(\&attr, 8 * 1024 * 1024);' src/torrent/system/thread.cc
-sed -i 's/pthread_create(&m_thread, nullptr,/pthread_create(\&m_thread, \&attr,/' src/torrent/system/thread.cc
-sed -i '/while (m_state != STATE_ACTIVE)/i\
-  pthread_attr_destroy(\&attr);' src/torrent/system/thread.cc
 # Patch epoll_ctl: handle EBADF/ENOENT gracefully for MOD/DEL (race with curl socket lifecycle)
 # EBADF = fd closed by curl before libtorrent could modify/remove it
 # ENOENT = fd reused by curl (new socket got same fd number, not yet in epoll)
 sed -i '/case EPOLL_CTL_MOD:/,/throw internal_error.*epoll_ctl(MOD).*strerror/ {
   /LT_LOG_EVENT.*EPOLL_CTL_MOD failed:.*strerror/a\
       if (errno == EBADF || errno == ENOENT) { set_event_mask(event, 0); return; }
-}' src/torrent/net/poll_epoll.cc
+}' src/torrent/system/poll_epoll.cc
 sed -i '/case EPOLL_CTL_DEL:/,/throw internal_error.*epoll_ctl(DEL)/ {
   /LT_LOG_EVENT.*EPOLL_CTL_DEL failed/a\
       if (errno == EBADF || errno == ENOENT) { set_event_mask(event, 0); return; }
-}' src/torrent/net/poll_epoll.cc
+}' src/torrent/system/poll_epoll.cc
 autoreconf -fiv
 ./configure \
     --prefix="$PREFIX" \
     --enable-static --disable-shared \
+    --enable-pthread-setstacksize \
     --disable-execinfo \
     CC="$CC" CXX="$CXX" \
     CFLAGS="-O2 -fno-pie -static" \
@@ -358,7 +351,7 @@ Fully static binary. No runtime dependencies. Runs on any x86_64 Linux.
 
 ### Patches and modifications
 - **epoll_ctl EBADF/ENOENT** (libtorrent): Handle \`EBADF\`/\`ENOENT\` gracefully on \`EPOLL_CTL_MOD\`/\`EPOLL_CTL_DEL\` (race with curl socket lifecycle)
-- **pthread stack size** (libtorrent): Explicit 8 MB stack (musl default is 128 KB)
+- **pthread stack size** (libtorrent ≥ 0.16.13, upstream): \`--enable-pthread-setstacksize\` sets 8 MB stack (musl default is 128 KB)
 - **mimalloc allocator**: Replaces musl's single-lock malloc with per-thread heaps
 
 ### Build flags

@@ -16,7 +16,10 @@ jobs:
         env:
           URL_MUSL_X86_64: ${{ secrets.URL_MUSL_X86_64 }}
           URL_ZLIB: ${{ secrets.URL_ZLIB }}
-        run: sudo -E bash scripts/build.sh
+        # Run unprivileged so the step env reaches the script: the runner's sudo
+        # is sudo-rs, which ignores `sudo -E`. The script itself elevates only
+        # the few steps that write to /opt and /output.
+        run: bash scripts/build.sh
 
       - name: Get build outputs
         id: build

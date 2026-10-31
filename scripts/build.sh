@@ -5,6 +5,11 @@ set -euo pipefail
 # Static rtorrent build script
 # Builds rtorrent and all dependencies from source using musl cross toolchain.
 # Runs on Ubuntu (GH Actions runner or local Docker).
+#
+# Runs as an unprivileged user. sudo is used only for the few steps that write
+# outside user-writable locations: creating $PREFIX under /opt, creating
+# $OUTPUT_DIR, and extracting the toolchain into /opt. Everything else
+# (downloads, builds, installs into $PREFIX, packaging) runs as the caller.
 # =============================================================================
 
 BUILD_DIR="/tmp/rtorrent-build"
@@ -12,6 +17,11 @@ PREFIX="/opt/static-libs"
 OUTPUT_DIR="${OUTPUT_DIR:-/output}"
 MAKEFLAGS="-j$(nproc)"
 export MAKEFLAGS
+
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+    SUDO="sudo"
+fi
 
 # --- Custom source URLs (passed via environment, set from GH secrets) ---
 URL_MUSL_X86_64="${URL_MUSL_X86_64:?URL_MUSL_X86_64 is required}"
@@ -31,15 +41,23 @@ CURL_URL="https://curl.se/download/curl-${CURL_VERSION}.tar.gz"
 TINYXML2_URL="https://github.com/leethomason/tinyxml2/archive/refs/tags/${TINYXML2_VERSION}.tar.gz"
 LUA_URL="https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz"
 
-rm -rf "$BUILD_DIR" "$PREFIX"
-mkdir -p "$BUILD_DIR" "$PREFIX" "$OUTPUT_DIR"
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+# $PREFIX (under /opt) and $OUTPUT_DIR (/output by default) are root-only
+# locations: create them as root, then hand them to the build user so every
+# install and packaging step below runs unprivileged.
+$SUDO rm -rf "$PREFIX"
+$SUDO mkdir -p "$PREFIX" "$OUTPUT_DIR"
+$SUDO chown "$(id -u):$(id -g)" "$PREFIX" "$OUTPUT_DIR"
 cd "$BUILD_DIR"
 
 # =============================================================================
 # Step 0: Install musl cross toolchain
 # =============================================================================
 echo "=== Installing musl cross toolchain ==="
-curl -L "$URL_MUSL_X86_64" | tar xJ -C /opt/
+# /opt is root-owned, so only the extraction is elevated; the toolchain is
+# only ever executed from there, never written to, after this point.
+curl -L "$URL_MUSL_X86_64" | $SUDO tar xJ -C /opt/
 # Discover the extracted directory name
 MUSL_CROSS_DIR=$(ls -d /opt/*-linux-musl-cross 2>/dev/null | head -1)
 if [ -z "$MUSL_CROSS_DIR" ]; then
@@ -107,7 +125,12 @@ cd ncurses-*/
     --without-cxx-binding \
     --with-default-terminfo-dir=/etc/terminfo \
     --with-terminfo-dirs="/etc/terminfo:/lib/terminfo:/usr/share/terminfo" \
+    --disable-db-install \
     CC="$CC" CXX="$CXX"
+# --disable-db-install: "make install" would otherwise compile the terminfo
+# database into --with-default-terminfo-dir (/etc/terminfo), which needs root.
+# The build only needs the library and headers; the static rtorrent reads the
+# target host's own terminfo from the compiled-in search dirs at runtime.
 make
 make install
 # Create non-wide symlinks so -lncurses finds ncursesw

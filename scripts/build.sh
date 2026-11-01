@@ -10,6 +10,12 @@ set -euo pipefail
 # outside user-writable locations: creating $PREFIX under /opt, creating
 # $OUTPUT_DIR, and extracting the toolchain into /opt. Everything else
 # (downloads, builds, installs into $PREFIX, packaging) runs as the caller.
+#
+# Debug info: every dependency is compiled with -ggdb (at its normal
+# optimisation level) so the unstripped debug binary carries DWARF for
+# libtorrent and all libraries, not only for rtorrent itself. The release
+# binary is stripped, so it is unaffected. See "Build flags" in the release
+# notes below.
 # =============================================================================
 
 BUILD_DIR="/tmp/rtorrent-build"
@@ -88,7 +94,7 @@ $CC --version | head -1
 echo "=== Building zlib ==="
 curl -L "$URL_ZLIB" | tar xz
 cd zlib-*/
-CC=$CC CFLAGS="-O2 -fPIC" ./configure --prefix="$PREFIX" --static
+CC=$CC CFLAGS="-O2 -ggdb -fPIC" ./configure --prefix="$PREFIX" --static
 make
 make install
 ZLIB_VERSION=$(pkg-config --modversion zlib 2>/dev/null || grep -oP 'Version: \K.*' "$PREFIX/lib/pkgconfig/zlib.pc")
@@ -105,7 +111,7 @@ cd openssl-*/
     --openssldir=/etc/ssl \
     no-shared no-dso no-tests no-engine \
     CC="$CC" AR="$AR" RANLIB="$RANLIB" \
-    CFLAGS="-O2 -fPIC"
+    CFLAGS="-O2 -ggdb -fPIC"
 make
 make install_sw
 cd "$BUILD_DIR"
@@ -126,7 +132,8 @@ cd ncurses-*/
     --with-default-terminfo-dir=/etc/terminfo \
     --with-terminfo-dirs="/etc/terminfo:/lib/terminfo:/usr/share/terminfo" \
     --disable-db-install \
-    CC="$CC" CXX="$CXX"
+    CC="$CC" CXX="$CXX" \
+    CFLAGS="-O2 -ggdb"
 # --disable-db-install: "make install" would otherwise compile the terminfo
 # database into --with-default-terminfo-dir (/etc/terminfo), which needs root.
 # The build only needs the library and headers; the static rtorrent reads the
@@ -164,7 +171,7 @@ cd curl-*/
     --disable-rtsp --disable-file --disable-ftp \
     --disable-manual --disable-docs \
     CC="$CC" CXX="$CXX" \
-    CFLAGS="-O2 -fPIC" \
+    CFLAGS="-O2 -ggdb -fPIC" \
     LDFLAGS="-L$PREFIX/lib" \
     CPPFLAGS="-I$PREFIX/include"
 make
@@ -177,12 +184,16 @@ cd "$BUILD_DIR"
 echo "=== Building tinyxml2 ${TINYXML2_VERSION} ==="
 curl -L "$TINYXML2_URL" | tar xz
 cd tinyxml2-*/
+# CMAKE_BUILD_TYPE must be explicit: unset, cmake passes no -O flag at all.
 cmake -B build \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_C_COMPILER="$CC" \
     -DCMAKE_CXX_COMPILER="$CXX" \
     -DCMAKE_AR="$(which $AR)" \
     -DCMAKE_RANLIB="$(which $RANLIB)" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS_RELEASE="-O2 -ggdb -DNDEBUG" \
+    -DCMAKE_CXX_FLAGS_RELEASE="-O2 -ggdb -DNDEBUG" \
     -DBUILD_SHARED_LIBS=OFF \
     -DBUILD_TESTING=OFF
 cmake --build build
@@ -201,7 +212,7 @@ make posix \
     CC="$CC" \
     AR="$AR rcs" \
     RANLIB="$RANLIB" \
-    MYCFLAGS="-fPIC" \
+    MYCFLAGS="-ggdb -fPIC" \
     MYLDFLAGS="-static"
 make install INSTALL_TOP="$PREFIX"
 # Create pkg-config file for Lua (not shipped by default)
@@ -227,12 +238,17 @@ echo "=== Building mimalloc ==="
 MIMALLOC_VERSION="2.1.7"
 curl -L "https://github.com/microsoft/mimalloc/archive/refs/tags/v${MIMALLOC_VERSION}.tar.gz" | tar xz
 cd mimalloc-*/
+# Release (-O3 -DNDEBUG) is what mimalloc defaulted to before; pin it so the
+# allocator keeps NDEBUG (no MI_DEBUG assertions) and only gains -ggdb.
 cmake -B build \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_C_COMPILER="$CC" \
     -DCMAKE_CXX_COMPILER="$CXX" \
     -DCMAKE_AR="$(which $AR)" \
     -DCMAKE_RANLIB="$(which $RANLIB)" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS_RELEASE="-O3 -ggdb -DNDEBUG" \
+    -DCMAKE_CXX_FLAGS_RELEASE="-O3 -ggdb -DNDEBUG" \
     -DMI_BUILD_SHARED=OFF \
     -DMI_BUILD_TESTS=OFF \
     -DMI_OVERRIDE=ON \
@@ -281,8 +297,8 @@ autoreconf -fiv
     --enable-pthread-setstacksize \
     --disable-execinfo \
     CC="$CC" CXX="$CXX" \
-    CFLAGS="-O2 -fno-pie -static" \
-    CXXFLAGS="-O2 -fno-pie -static" \
+    CFLAGS="-O2 -ggdb -fno-pie -static" \
+    CXXFLAGS="-O2 -ggdb -fno-pie -static" \
     LDFLAGS="-no-pie -static -L$PREFIX/lib" \
     CPPFLAGS="-I$PREFIX/include"
 make
@@ -326,6 +342,9 @@ cp src/rtorrent src/rtorrent-static
 $STRIP --strip-all src/rtorrent-static
 
 # --- Debug build ---
+# Same -O2 code as the release build, plus -ggdb, left unstripped: crashes
+# reproduce identically and every frame (rtorrent, libtorrent, libraries)
+# resolves to file:line.
 echo "=== Building debug binary ==="
 make clean
 ./configure \
@@ -334,8 +353,8 @@ make clean
     --with-lua \
     --disable-execinfo \
     CC="$CC" CXX="$CXX" \
-    CFLAGS="-O0 -ggdb -fno-pie -static" \
-    CXXFLAGS="-O0 -ggdb -fno-pie -static" \
+    CFLAGS="-O2 -ggdb -fno-pie -static" \
+    CXXFLAGS="-O2 -ggdb -fno-pie -static" \
     LDFLAGS="-no-pie -static -L$PREFIX/lib" \
     CPPFLAGS="-I$PREFIX/include" \
     PKG_CONFIG="pkg-config --static"
@@ -383,7 +402,7 @@ Fully static binary. No runtime dependencies. Runs on any x86_64 Linux.
 
 ### Build flags
 - Release: \`-O2\`, stripped
-- Debug: \`-O0 -ggdb\`, unstripped, with debug_info
+- Debug: \`-O2 -ggdb\`, unstripped. All libraries above are compiled with \`-ggdb\` too (\`-O2\`; mimalloc \`-O3\`), so debug info covers rtorrent, libtorrent and every dependency
 NOTES
 cd "$BUILD_DIR"
 
@@ -413,7 +432,45 @@ fi
 
 echo "--- file (debug) ---"
 tar xJf "$OUTPUT_DIR/$ARTIFACT_DBG" -C "$VERIFY_DIR"
-file "$VERIFY_DIR/rtorrent-static-debug"
+BINARY_DBG="$VERIFY_DIR/rtorrent-static-debug"
+file "$BINARY_DBG"
+
+echo "--- debug info check ---"
+# The debug binary must carry DWARF compile units from every source tree that
+# ends up linked in, not only from rtorrent itself: count DW_AT_comp_dir
+# entries per dependency directory under $BUILD_DIR. tinyxml2 is not in the
+# list because rtorrent compiles its own vendored copy (src/rpc/tinyxml2/)
+# rather than linking the one from $PREFIX; that unit is checked by name.
+READELF="${CROSS_PREFIX}-readelf"
+command -v "$READELF" >/dev/null 2>&1 || READELF=readelf
+"$READELF" --debug-dump=info --dwarf-depth=1 "$BINARY_DBG" \
+    | grep -E 'DW_AT_(name|comp_dir)' > "$VERIFY_DIR/dwarf_cus.txt"
+DEBUG_INFO_OK=1
+for tree in zlib- openssl- ncurses- curl- lua- mimalloc- libtorrent rtorrent; do
+    n=$(grep -F 'DW_AT_comp_dir' "$VERIFY_DIR/dwarf_cus.txt" | grep -c -F "$BUILD_DIR/$tree" || true)
+    if [ "$n" -gt 0 ]; then
+        echo "PASS: $n compile units with debug info from $tree"
+    else
+        echo "FAIL: no debug info from $tree"
+        DEBUG_INFO_OK=0
+    fi
+done
+# (single grep, no pipe: with pipefail, grep -q closing the pipe early would
+# make the pipeline fail on a match)
+if grep -E 'DW_AT_name.*tinyxml2/tinyxml2' "$VERIFY_DIR/dwarf_cus.txt" >/dev/null; then
+    echo "PASS: debug info for rtorrent's vendored tinyxml2"
+else
+    echo "FAIL: no debug info for rtorrent's vendored tinyxml2"
+    DEBUG_INFO_OK=0
+fi
+if [ "$DEBUG_INFO_OK" -ne 1 ]; then
+    echo "FAIL: debug binary is missing debug info for some dependencies"
+    exit 1
+fi
+if file "$BINARY" | grep -q "not stripped"; then
+    echo "FAIL: release binary is not stripped"
+    exit 1
+fi
 
 echo "--- size ---"
 ls -lh "$OUTPUT_DIR/$ARTIFACT" "$OUTPUT_DIR/$ARTIFACT_DBG"

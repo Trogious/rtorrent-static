@@ -37,14 +37,12 @@ URL_ZLIB="${URL_ZLIB:?URL_ZLIB is required}"
 OPENSSL_VERSION="3.3.2"
 NCURSES_VERSION="6.5"
 CURL_VERSION="8.11.1"
-TINYXML2_VERSION="10.0.0"
 LUA_VERSION="5.3.6"
 
 # --- Source URLs ---
 OPENSSL_URL="https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
 NCURSES_URL="https://invisible-mirror.net/archives/ncurses/ncurses-${NCURSES_VERSION}.tar.gz"
 CURL_URL="https://curl.se/download/curl-${CURL_VERSION}.tar.gz"
-TINYXML2_URL="https://github.com/leethomason/tinyxml2/archive/refs/tags/${TINYXML2_VERSION}.tar.gz"
 LUA_URL="https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz"
 
 rm -rf "$BUILD_DIR"
@@ -179,29 +177,7 @@ make install
 cd "$BUILD_DIR"
 
 # =============================================================================
-# Step 5: tinyxml2
-# =============================================================================
-echo "=== Building tinyxml2 ${TINYXML2_VERSION} ==="
-curl -L "$TINYXML2_URL" | tar xz
-cd tinyxml2-*/
-# CMAKE_BUILD_TYPE must be explicit: unset, cmake passes no -O flag at all.
-cmake -B build \
-    -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-    -DCMAKE_C_COMPILER="$CC" \
-    -DCMAKE_CXX_COMPILER="$CXX" \
-    -DCMAKE_AR="$(which $AR)" \
-    -DCMAKE_RANLIB="$(which $RANLIB)" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_FLAGS_RELEASE="-O2 -ggdb -DNDEBUG" \
-    -DCMAKE_CXX_FLAGS_RELEASE="-O2 -ggdb -DNDEBUG" \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_TESTING=OFF
-cmake --build build
-cmake --install build
-cd "$BUILD_DIR"
-
-# =============================================================================
-# Step 6: Lua
+# Step 5: Lua
 # =============================================================================
 echo "=== Building Lua ${LUA_VERSION} ==="
 curl -L "$LUA_URL" | tar xz
@@ -232,7 +208,7 @@ LUAPC
 cd "$BUILD_DIR"
 
 # =============================================================================
-# Step 7: mimalloc (replaces musl's single-lock malloc)
+# Step 6: mimalloc (replaces musl's single-lock malloc)
 # =============================================================================
 echo "=== Building mimalloc ==="
 MIMALLOC_VERSION="2.1.7"
@@ -258,7 +234,7 @@ cmake --install build
 cd "$BUILD_DIR"
 
 # =============================================================================
-# Step 8: Detect latest libtorrent/rtorrent tags
+# Step 7: Detect latest libtorrent/rtorrent tags
 # =============================================================================
 echo "=== Detecting latest release tags ==="
 latest_tag() {
@@ -274,7 +250,7 @@ echo "libtorrent: $LIBTORRENT_TAG"
 echo "rtorrent:   $RTORRENT_TAG"
 
 # =============================================================================
-# Step 9: libtorrent
+# Step 8: libtorrent
 # =============================================================================
 echo "=== Building libtorrent $LIBTORRENT_TAG ==="
 git clone --depth 1 --branch "$LIBTORRENT_TAG" https://github.com/rakshasa/libtorrent.git
@@ -312,7 +288,7 @@ fi
 cd "$BUILD_DIR"
 
 # =============================================================================
-# Step 10: rtorrent
+# Step 9: rtorrent
 # =============================================================================
 echo "=== Building rtorrent $RTORRENT_TAG ==="
 git clone --depth 1 --branch "$RTORRENT_TAG" https://github.com/rakshasa/rtorrent.git
@@ -376,6 +352,16 @@ echo "$ARTIFACT" > "$OUTPUT_DIR/artifact-name"
 # we never publish a release with a blank toolchain version.
 GCC_VERSION=$("$CC" -dumpfullversion 2>/dev/null || "$CC" -dumpversion)
 : "${GCC_VERSION:?failed to detect GCC version from $CC}"
+# tinyxml2 is not a separate dependency: rtorrent compiles its own vendored
+# copy (src/rpc/tinyxml2/), so report that copy's version. The header has
+# CRLF line endings, hence the gsub.
+TINYXML2_VERSION=$(awk '/#define TINYXML2_(MAJOR|MINOR|PATCH)_VERSION/ { gsub(/\r/, ""); v[$2] = $3 }
+    END { print v["TINYXML2_MAJOR_VERSION"] "." v["TINYXML2_MINOR_VERSION"] "." v["TINYXML2_PATCH_VERSION"] }' \
+    src/rpc/tinyxml2/tinyxml2.h)
+if ! [[ "$TINYXML2_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "FATAL: failed to detect vendored tinyxml2 version (got '$TINYXML2_VERSION')"
+    exit 1
+fi
 cat > "$OUTPUT_DIR/release-notes.md" <<NOTES
 ## Static musl build — x86_64
 
@@ -391,7 +377,7 @@ Fully static binary. No runtime dependencies. Runs on any x86_64 Linux.
 | ncurses | ${NCURSES_VERSION} |
 | zlib | ${ZLIB_VERSION} |
 | Lua | ${LUA_VERSION} |
-| tinyxml2 | ${TINYXML2_VERSION} |
+| tinyxml2 (vendored in rtorrent) | ${TINYXML2_VERSION} |
 | mimalloc | ${MIMALLOC_VERSION} |
 | musl toolchain (gcc) | ${GCC_VERSION} |
 
